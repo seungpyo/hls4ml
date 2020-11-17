@@ -20,6 +20,10 @@ class PyTorchDataReader:
 
         self.state_dict = self.torch_model.state_dict()
     
+        if 'InputImageSize' in config:
+            self.input_image_size = config['InputImageSize'].split('x')
+            self.input_image_size = tuple([int(x) for x in self.input_image_size])
+    
     def get_weights_data(self, layer_name, var_name):
         if var_name == 'kernel':
             var_name = 'weight'
@@ -28,6 +32,7 @@ class PyTorchDataReader:
             data = self.state_dict[layer_name + '.' + var_name].numpy().transpose()
 
         return data
+
 
 def pytorch_to_hls(yamlConfig):
 
@@ -38,19 +43,21 @@ def pytorch_to_hls(yamlConfig):
     print('Interpreting Model')
     reader = PyTorchDataReader(yamlConfig)
 
-    core_layers = ['Linear']
+    core_layers = ['Linear', 'Conv2d']
     skip_layers = ['Dropout', 'Flatten']
     activation_layers = ['ReLU', 'Sigmoid', 'Tanh', 'SELU', 'LeakyReLU', 'Softmax', 'Softplus', 'Softsign']
     supported_layers = core_layers + skip_layers + activation_layers
 
     #This is a list of dictionaries to hold all the layer info we need to generate HLS
     layer_list = []
-
+    image_size = reader.input_image_size
+    
     #Loop through layers
     print('Topology:')
     modelstr = repr(reader.torch_model).split('\n')
+    
     for pytorch_layer in modelstr:
-        layer_match = re.match(r'\((\d)\): (\w+)\((.*)\)', pytorch_layer.strip())
+        layer_match = re.match(r'\((.*)\): (\w+)\((.*)\)', pytorch_layer.strip())
         if layer_match is None:
             continue
         
@@ -79,6 +86,42 @@ def pytorch_to_hls(yamlConfig):
 
             current_shape = [layer['n_in'], layer['n_out']]
             print('Layer index: {}, layer type: {}, current shape: {}'.format(layer['name'], layer['class_name'], current_shape))
+
+        elif layer_type == 'Conv2d':
+            layer['class_name'] = 'Conv2D'
+            layer['name'] = layer_idx
+            layer_spec += ','
+            conv2d_pattern = r'(?P<n_chan>\d+), (?P<n_filt>\d+), kernel_size=\((?P<filt_height>\d+), (?P<filt_width>\d+)\), stride=\((?P<stride_height>\d+), (?P<stride_width>\d+)\),\s*(?:padding=\((?P<padding_height>\d+), (?P<padding_width>\d+)\),)?\s*(?:dilation=\((?P<dilation_height>\d+), (?P<dilation_width>\d+)\),)?.*'
+            conv2d_regex = re.compile(conv2d_pattern)
+            # layer_match = re.findall(conv2d_regex, layer_spec)
+            layer_match = re.search(conv2d_regex, layer_spec)
+            if layer_match is None:
+                print('Parsing failed for layer repr:')
+                print(layer_spec)
+
+            conv2d_specs = ['n_chan', 'n_filt', 'filt_height', 'filt_width']
+            conv2d_specs_optional = {
+                'stride_height': '1', 'stride_width': '1',
+                'padding_height': '0', 'padding_width': '0',
+                'dilation_height': '1', 'dilation_width': '1',
+            }
+            for spec in conv2d_specs:
+                layer[spec] = layer_match.group(spec)
+            for spec in conv2d_specs_optional:
+                layer[spec] = layer_match.group(spec)
+                if layer[spec] is None:
+                    layer[spec] = conv2d_specs_optional[spec]
+            for spec in conv2d_specs:
+                layer[spec] = int(layer[spec])
+            for spec in conv2d_specs_optional:
+                layer[spec] = int(layer[spec])
+            layer['n_in'] = layer['n_chan'] * layer['filt_height'] * layer['filt_width']
+            layer['n_out'] = layer['n_filt']
+            print('Parsing succeed for layer repr:')
+            print(layer_spec)
+            print('layer:')
+            print(layer)
+
         elif layer_type in activation_layers:
             layer['activation'] = layer_type.lower()
             if layer['activation'] == 'Softmax':
