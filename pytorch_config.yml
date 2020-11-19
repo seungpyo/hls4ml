@@ -3,7 +3,7 @@ PytorchModel: pytorch/conv.pth
 #InputData: keras/KERAS_3layer_input_features.dat
 #OutputPredictions: keras/KERAS_3layer_predictions.dat
 OutputDir: my-hls-test
-InputImageSize: 32x32
+InputImageSize: 3x32x32
 ProjectName: myproject
 XilinxPart: xcku115-flvb2104-2-i
 ClockPeriod: 5
